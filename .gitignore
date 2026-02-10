@@ -1,0 +1,14 @@
+Debug/
+Release/
+.settings/
+.build/
+*.launch
+*.log
+*.o
+*.d
+*.elf
+*.map
+
+# OS
+Thumbs.db
+.DS_Store
