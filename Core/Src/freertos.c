@@ -1,18 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * File Name          : freertos.c
-  * Description        : Code for freertos applications
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+  * @file           : freertos.c
+  * @brief          : FreeRTOS initialization and tasks
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -22,208 +12,148 @@
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
+
+/* [중요] 변수와 함수를 쓰기 위해 헤더 포함 */
 #include "app_state.h"
 #include "motor.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-
-/* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
 /* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
+#define LONG_MS 1500     // 장축 기준 시간 (1.5초)
 
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-volatile uint32_t dbg_btn_msg = 0;
-volatile uint32_t dbg_btn_tick = 0;
-volatile uint32_t dbg_btn_level = 0;
-volatile uint32_t dbg_pressTick = 0;
-volatile uint32_t dbg_dur = 0;      // 눌린 시간(tick 단위, 보통 1tick=1ms)
-/* USER CODE END Variables */
-/* Definitions for defaultTask */
+/* Global Variables */
 osThreadId_t defaultTaskHandle;
+osThreadId_t ButtonTaskHandle;
+osThreadId_t MotorTaskHandle;
+osMessageQueueId_t btnEdgeQHandle;
+
+/* Task Attributes */
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for ButtonTask */
-osThreadId_t ButtonTaskHandle;
 const osThreadAttr_t ButtonTask_attributes = {
   .name = "ButtonTask",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal1,
 };
-/* Definitions for MotorTask */
-osThreadId_t MotorTaskHandle;
 const osThreadAttr_t MotorTask_attributes = {
   .name = "MotorTask",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for btnEdgeQ */
-osMessageQueueId_t btnEdgeQHandle;
 const osMessageQueueAttr_t btnEdgeQ_attributes = {
   .name = "btnEdgeQ"
 };
+/* USER CODE END Variables */
 
 /* Private function prototypes -----------------------------------------------*/
-/* USER CODE BEGIN FunctionPrototypes */
-
-/* USER CODE END FunctionPrototypes */
-
 void StartDefaultTask(void *argument);
 void StartButtonTask(void *argument);
 void StartMotorTask(void *argument);
 
-void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+void MX_FREERTOS_Init(void);
 
 /**
-  * @brief  FreeRTOS initialization
-  * @param  None
-  * @retval None
+  * @brief  FreeRTOS Initialization
   */
 void MX_FREERTOS_Init(void) {
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
-
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
-
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
-
-  /* Create the queue(s) */
-  /* creation of btnEdgeQ */
-  btnEdgeQHandle = osMessageQueueNew (10, sizeof(uint32_t), &btnEdgeQ_attributes);
-
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of defaultTask */
+  btnEdgeQHandle = osMessageQueueNew(10, sizeof(uint32_t), &btnEdgeQ_attributes);
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-
-  /* creation of ButtonTask */
   ButtonTaskHandle = osThreadNew(StartButtonTask, NULL, &ButtonTask_attributes);
-
-  /* creation of MotorTask */
   MotorTaskHandle = osThreadNew(StartMotorTask, NULL, &MotorTask_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
-
-  /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
-  /* USER CODE END RTOS_EVENTS */
-
 }
 
 /* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  /* USER CODE BEGIN StartDefaultTask */
-  /* Infinite loop */
   for(;;)
   {
-	  if (stop_flag == 0) Motor_Run(speed_step);
-	  else Motor_Stop();
-
-	  osDelay(10);
+    if (stop_flag == 0) Motor_Run(speed_step);
+    else Motor_Stop();
+    osDelay(10);
   }
-  /* USER CODE END StartDefaultTask */
 }
 
 /* USER CODE BEGIN Header_StartButtonTask */
 /**
 * @brief Function implementing the ButtonTask thread.
-* @param argument: Not used
-* @retval None
+* @note  [Troubleshooting Report - 문제 해결 기록]
+* * 1. 초기 문제 :
+* - ISR에서 타임스탬프를 큐로 전달하는 방식을 사용했으나,
+* - 스위치 채터링과 RTOS 스케줄링 지연으로 인해
+* - 단축/장축 판별이 불규칙하게 동작함.
+*
+* 2. 해결 방안 :
+* - ISR은 단순 트리거 역할만 수행하도록 변경.
+* - Task 내에서 폴링방식으로 전환.
+* - while 루프를 통해 물리적 핀 상태를 직접 추적하여 정확한 Duration 측정.
 */
 /* USER CODE END Header_StartButtonTask */
 void StartButtonTask(void *argument)
 {
-  /* USER CODE BEGIN StartButtonTask */
-	uint32_t msg;
-  /* Infinite loop */
+  uint32_t msg;
+
   for(;;)
   {
-	  osMessageQueueGet(btnEdgeQHandle, &msg, NULL, osWaitForever);
-	  osDelay(30);
+      // 1. ISR 신호 대기
+      if (osMessageQueueGet(btnEdgeQHandle, &msg, NULL, osWaitForever) == osOK)
+      {
+          // 2. 디바운싱
+          osDelay(50);
 
-	  dbg_btn_msg   = msg;
-	  dbg_btn_tick  = (msg >> 1);     // now
-	  dbg_btn_level = (msg & 1u);     // level(네가 ISR에서 넣은 bit0)
-	  uint8_t level = (uint8_t)(msg & 1u);   // 0=눌림, 1=뗌
+          // 3. 핀 상태 확인 (PULLDOWN이므로: 누르면 SET(1)이 되어야 함)
+          // [수정] RESET -> SET 으로 변경
+          if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_SET)
+          {
+              // --- 눌림 시작 ---
+              uint32_t start_tick = osKernelGetTickCount();
 
-	  if (level == 0u) {
-		  dbg_pressTick = osKernelGetTickCount();
-	     }
-	  else {
-		  uint32_t now = osKernelGetTickCount();
-	      dbg_dur = now - dbg_pressTick;
+              // ★★★ 버튼 감옥 (Blocking Loop) ★★★
+              // 버튼이 눌려있는(SET/High) 동안은 여기서 무한 대기
+              // [수정] RESET -> SET 으로 변경
+              while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_SET)
+              {
+                  osDelay(10);
+              }
 
-	      if(dbg_dur>= 800) {
-	    	  speed_step= (speed_step+1)%3; }
-	      else {
-	    	  stop_flag ^=1u; }
-	      }
-	     }
+              // --- 손 뗌 (Release) ---
 
+              // 4. 뗌 디바운싱
+              osDelay(50);
 
+              // 5. 시간 계산
+              uint32_t end_tick = osKernelGetTickCount();
+              uint32_t duration = end_tick - start_tick;
 
+              // 6. 동작 수행 (50ms 이상 눌렀을 때만)
+              if (duration > 50)
+              {
+                  if (duration >= LONG_MS)
+                  {
+                      // 장축 -> 속도 변경
+                      speed_step = (speed_step + 1) % 3;
+                  }
+                  else
+                  {
+                      // 단축 -> 정지/가동
+                      stop_flag ^= 1u;
+                  }
+              }
+
+              // 7. 큐 비우기
+              osMessageQueueReset(btnEdgeQHandle);
+          }
+      }
   }
-  /* USER CODE END StartButtonTask */
-
-
-/* USER CODE BEGIN Header_StartMotorTask */
-/**
-* @brief Function implementing the MotorTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_StartMotorTask */
-void StartMotorTask(void *argument)
-{
-  /* USER CODE BEGIN StartMotorTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END StartMotorTask */
 }
 
-/* Private application code --------------------------------------------------*/
-/* USER CODE BEGIN Application */
-
-/* USER CODE END Application */
-
+/* USER CODE BEGIN Header_StartMotorTask */
+void StartMotorTask(void *argument)
+{
+  for(;;)
+  {
+    osDelay(1000);
+  }
+}

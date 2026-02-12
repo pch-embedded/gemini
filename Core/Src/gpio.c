@@ -3,17 +3,7 @@
   ******************************************************************************
   * @file    gpio.c
   * @brief   This file provides code for the configuration
-  *          of all used GPIO pins.
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+  * of all used GPIO pins.
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -22,14 +12,12 @@
 #include "gpio.h"
 
 /* USER CODE BEGIN 0 */
-
 /* USER CODE END 0 */
 
 /*----------------------------------------------------------------------------*/
 /* Configure GPIO                                                             */
 /*----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
-
 /* USER CODE END 1 */
 
 /** Configure pins
@@ -63,7 +51,11 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+
+  /* [수정] PULLUP -> PULLDOWN 으로 변경 */
+  /* 버튼을 누르지 않았을 때 0V(GND)로 확실하게 잡아줍니다. */
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pins : STLINK_RX_Pin STLINK_TX_Pin */
@@ -91,9 +83,6 @@ void MX_GPIO_Init(void)
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
-
 }
-
 /* USER CODE BEGIN 2 */
-
 /* USER CODE END 2 */
