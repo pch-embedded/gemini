@@ -1,8 +1,18 @@
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * @file           : freertos.c
-  * @brief          : FreeRTOS initialization and tasks
+  * File Name          : freertos.c
+  * Description        : Code for freertos applications
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -13,147 +23,292 @@
 #include "main.h"
 #include "cmsis_os.h"
 
-/* [중요] 변수와 함수를 쓰기 위해 헤더 포함 */
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "gpio.h"
 #include "app_state.h"
 #include "motor.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+/* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
-#define LONG_MS 1500     // 장축 기준 시간 (1.5초)
+/* USER CODE BEGIN PD */
+/*
+ * [PORTFOLIO NOTE - 버튼 처리 설계]
+ * 1) ISR(EXTI)은 "최소 작업"만 수행:
+ *    - tick + level 을 큐에 넣고 바로 리턴 
+ *
+ * 2) ButtonTask는:
+ *    - 큐에서 이벤트를 받고 디바운스 후 안정 상태 변화로 인정
+ *    - press 때는 기록만 하고, release 때만 duration 계산해서 short/long 판정
+ *      => "누르자마자 반응" 문제 해결(떼는 순간에 판정)
+ *
+ * 3) MotorTask는:
+ *    - 모터 제어의 단일 소유자
+ *    - ButtonTask가 만든 MotorCmd를 받아서 Motor_Run/Stop 수행
+ *
+ * [풀다운 기준]
+ * - pressed=1(SET), released=0(RESET)
+ */
+#define BTN_PORT          GPIOC
+#define BTN_PIN           GPIO_PIN_13
 
+#define BTN_DEBOUNCE_MS   (30u)
+#define BTN_LONG_MS       (800u)
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-/* Global Variables */
-osThreadId_t defaultTaskHandle;
-osThreadId_t ButtonTaskHandle;
-osThreadId_t MotorTaskHandle;
-osMessageQueueId_t btnEdgeQHandle;
+volatile uint32_t dbg_btn_msg    = 0;
+volatile uint32_t dbg_edge_tick  = 0;
+volatile uint32_t dbg_edge_level = 0;
+volatile uint32_t dbg_press_tick = 0;
+volatile uint32_t dbg_dur_ms     = 0;
+/* USER CODE END Variables */
 
-/* Task Attributes */
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+/* USER CODE BEGIN RTOS_THREADS */
+/* Definitions for ButtonTask */
+osThreadId_t ButtonTaskHandle;
 const osThreadAttr_t ButtonTask_attributes = {
   .name = "ButtonTask",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal1,
 };
+
+/* Definitions for MotorTask */
+osThreadId_t MotorTaskHandle;
 const osThreadAttr_t MotorTask_attributes = {
   .name = "MotorTask",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* USER CODE END RTOS_THREADS */
+
+/* USER CODE BEGIN RTOS_QUEUES */
+/* btnEdgeQ: ISR이 (tick,level)을 보내는 큐 */
+osMessageQueueId_t btnEdgeQHandle;
 const osMessageQueueAttr_t btnEdgeQ_attributes = {
   .name = "btnEdgeQ"
 };
-/* USER CODE END Variables */
+
+/* motorCmdQ: ButtonTask -> MotorTask 명령 큐 */
+osMessageQueueId_t motorCmdQHandle;
+const osMessageQueueAttr_t motorCmdQ_attributes = {
+  .name = "motorCmdQ"
+};
+/* USER CODE END RTOS_QUEUES */
 
 /* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+/* USER CODE END FunctionPrototypes */
+
 void StartDefaultTask(void *argument);
+/* USER CODE BEGIN FunctionPrototypes2 */
 void StartButtonTask(void *argument);
 void StartMotorTask(void *argument);
+/* USER CODE END FunctionPrototypes2 */
 
-void MX_FREERTOS_Init(void);
+void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
-  * @brief  FreeRTOS Initialization
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
   */
 void MX_FREERTOS_Init(void) {
-  btnEdgeQHandle = osMessageQueueNew(10, sizeof(uint32_t), &btnEdgeQ_attributes);
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  btnEdgeQHandle  = osMessageQueueNew(10, sizeof(uint32_t), &btnEdgeQ_attributes);
+  motorCmdQHandle = osMessageQueueNew(10, sizeof(MotorCmd_t), &motorCmdQ_attributes);
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
   ButtonTaskHandle = osThreadNew(StartButtonTask, NULL, &ButtonTask_attributes);
-  MotorTaskHandle = osThreadNew(StartMotorTask, NULL, &MotorTask_attributes);
+  MotorTaskHandle  = osThreadNew(StartMotorTask,  NULL, &MotorTask_attributes);
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
 }
 
 /* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  for(;;)
-  {
-    if (stop_flag == 0) Motor_Run(speed_step);
-    else Motor_Stop();
-    osDelay(10);
-  }
-}
+  /* USER CODE BEGIN StartDefaultTask */
+  (void)argument;
 
-/* USER CODE BEGIN Header_StartButtonTask */
-/**
-* @brief Function implementing the ButtonTask thread.
-* @note  [Troubleshooting Report - 문제 해결 기록]
-* * 1. 초기 문제 :
-* - ISR에서 타임스탬프를 큐로 전달하는 방식을 사용했으나,
-* - 스위치 채터링과 RTOS 스케줄링 지연으로 인해
-* - 단축/장축 판별이 불규칙하게 동작함.
-*
-* 2. 해결 방안 :
-* - ISR은 단순 트리거 역할만 수행하도록 변경.
-* - Task 내에서 폴링방식으로 전환.
-* - while 루프를 통해 물리적 핀 상태를 직접 추적하여 정확한 Duration 측정.
-*/
-/* USER CODE END Header_StartButtonTask */
-void StartButtonTask(void *argument)
-{
-  uint32_t msg;
-
-  for(;;)
-  {
-      // 1. ISR 신호 대기
-      if (osMessageQueueGet(btnEdgeQHandle, &msg, NULL, osWaitForever) == osOK)
-      {
-          // 2. 디바운싱
-          osDelay(50);
-
-          // 3. 핀 상태 확인 (PULLDOWN이므로: 누르면 SET(1)이 되어야 함)
-          // [수정] RESET -> SET 으로 변경
-          if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_SET)
-          {
-              // --- 눌림 시작 ---
-              uint32_t start_tick = osKernelGetTickCount();
-
-              // ★★★ 버튼 감옥 (Blocking Loop) ★★★
-              // 버튼이 눌려있는(SET/High) 동안은 여기서 무한 대기
-              // [수정] RESET -> SET 으로 변경
-              while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_SET)
-              {
-                  osDelay(10);
-              }
-
-              // --- 손 뗌 (Release) ---
-
-              // 4. 뗌 디바운싱
-              osDelay(50);
-
-              // 5. 시간 계산
-              uint32_t end_tick = osKernelGetTickCount();
-              uint32_t duration = end_tick - start_tick;
-
-              // 6. 동작 수행 (50ms 이상 눌렀을 때만)
-              if (duration > 50)
-              {
-                  if (duration >= LONG_MS)
-                  {
-                      // 장축 -> 속도 변경
-                      speed_step = (speed_step + 1) % 3;
-                  }
-                  else
-                  {
-                      // 단축 -> 정지/가동
-                      stop_flag ^= 1u;
-                  }
-              }
-
-              // 7. 큐 비우기
-              osMessageQueueReset(btnEdgeQHandle);
-          }
-      }
-  }
-}
-
-/* USER CODE BEGIN Header_StartMotorTask */
-void StartMotorTask(void *argument)
-{
+  /*
+   * [PORTFOLIO NOTE]
+   * - defaultTask에서 모터를 직접 제어하던 구조를 뺌
+   * - MotorTask만 모터를 제어하도록 분리
+   */
   for(;;)
   {
     osDelay(1000);
   }
+  /* USER CODE END StartDefaultTask */
 }
+
+/* USER CODE BEGIN Header_StartButtonTask */
+/**
+  * @brief  Function implementing the ButtonTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartButtonTask */
+void StartButtonTask(void *argument)
+{
+  /* USER CODE BEGIN StartButtonTask */
+  (void)argument;
+
+  /* stable_level: 0=released, 1=pressed (풀다운) */
+  uint8_t  stable_level = 0u;
+  uint32_t press_tick   = 0u;
+
+  for(;;)
+  {
+    uint32_t msg;
+    osMessageQueueGet(btnEdgeQHandle, &msg, NULL, osWaitForever);
+
+    dbg_btn_msg = msg;
+
+    /* ISR에서 캡처한 tick/level을 사용: Task 지연이 있어도 이벤트 시각은 ISR 기준으로 유지 */
+    uint32_t edge_tick = (msg >> 1);
+    uint8_t  edge_lvl  = (uint8_t)(msg & 1u); /* 1=pressed, 0=released */
+
+    dbg_edge_tick  = edge_tick;
+    dbg_edge_level = edge_lvl;
+
+    /* 디바운스: 잠깐 기다렸다가 실제 핀 상태로 확정 */
+    osDelay(BTN_DEBOUNCE_MS);
+
+    uint8_t now_lvl = (HAL_GPIO_ReadPin(BTN_PORT, BTN_PIN) == GPIO_PIN_SET) ? 1u : 0u;
+
+    /* 바운스면 버림 */
+    if (now_lvl != edge_lvl) continue;
+
+    /* 이미 안정상태와 같으면 버림 */
+    if (now_lvl == stable_level) continue;
+
+    /* 안정상태 갱신 */
+    stable_level = now_lvl;
+
+    if (stable_level == 1u)
+    {
+      /*
+       * pressed:
+       * - "누르자마자 동작"을 막기 위해 여기서 아무 것도 하지 않고
+       *   시간 기준점만 기록한다.
+       */
+      press_tick     = edge_tick;
+      dbg_press_tick = press_tick;
+    }
+    else
+    {
+      /*
+       * released:
+       * - 여기서만 short/long 판정 후 상태 갱신
+       * - 사용자가 '떼는 순간'에만 동작이 결정되므로 요구사항 충족
+       */
+      uint32_t dur = edge_tick - press_tick;
+      dbg_dur_ms = dur;
+
+      if (dur >= BTN_LONG_MS)
+      {
+        /* long: speed만 변경 */
+        speed_step = (uint8_t)((speed_step + 1u) % 3u);
+      }
+      else
+      {
+        /* short: stop/run 토글 */
+        stop_flag ^= 1u;
+      }
+
+      /* MotorTask로 명령 전달 (모터 제어는 MotorTask만 수행) */
+      MotorCmd_t cmd;
+      cmd.speed_step = speed_step;
+      cmd.type = (stop_flag != 0u) ? MOTOR_CMD_STOP : MOTOR_CMD_RUN;
+
+      osMessageQueuePut(motorCmdQHandle, &cmd, 0U, 0U);
+    }
+  }
+  /* USER CODE END StartButtonTask */
+}
+
+/* USER CODE BEGIN Header_StartMotorTask */
+/**
+  * @brief  Function implementing the MotorTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartMotorTask */
+void StartMotorTask(void *argument)
+{
+  /* USER CODE BEGIN StartMotorTask */
+  (void)argument;
+
+  /*
+   * [PORTFOLIO NOTE]
+   * - Safe boot: 스케줄러 시작 후에도 모터가 자동으로 돌지 않게 Motor_Stop()부터 수행.
+   * - 이후 모든 제어는 motorCmdQ를 통해서만 들어온다.
+   */
+  Motor_Stop();
+
+  for(;;)
+  {
+    MotorCmd_t cmd;
+    osMessageQueueGet(motorCmdQHandle, &cmd, NULL, osWaitForever);
+
+    if (cmd.type == MOTOR_CMD_STOP)
+      Motor_Stop();
+    else
+      Motor_Run(cmd.speed_step);
+  }
+  /* USER CODE END StartMotorTask */
+}
+
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+/* USER CODE END Application */
